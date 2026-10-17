@@ -1,0 +1,4 @@
+target/
+elixir/
+tests/
+*.md

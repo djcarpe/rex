@@ -1,0 +1,160 @@
+# A rex node and two Elixir nodes clustering inside k3s.
+#   kubectl apply -f k8s/rex-demo.yaml
+# The Elixir pods run libcluster's Kubernetes.DNS strategy; rex runs its
+# KubernetesDns and Kubernetes (API) strategies. All pods are named app@<pod ip>.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rex-demo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rex-demo
+  namespace: rex-demo
+spec:
+  clusterIP: None            # headless: A records = pod IPs
+  publishNotReadyAddresses: true
+  selector:
+    cluster: rex-demo
+  ports:
+    - name: epmd
+      port: 4369
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-script
+  namespace: rex-demo
+data:
+  demo.exs: |
+    # Elixir side of the rex k3s demo: libcluster Kubernetes.DNS over the headless
+    # service `rex-demo`, then keep calling into whatever rex nodes show up.
+    Mix.install([{:libcluster, "~> 3.5"}])
+
+    topologies = [
+      k8s: [
+        strategy: Cluster.Strategy.Kubernetes.DNS,
+        config: [service: "rex-demo", application_name: "app", polling_interval: 3_000]
+      ]
+    ]
+
+    {:ok, _} = Cluster.Supervisor.start_link([topologies, [name: Demo.ClusterSupervisor]])
+    IO.puts("[#{node()}] libcluster Kubernetes.DNS started")
+
+    defmodule Demo do
+      def loop(seen) do
+        hidden = Node.list(:hidden)
+        for rex <- hidden do
+          add = :erpc.call(rex, Rex.Math, :add, [40, 2])
+          mods = :erpc.call(rex, :rex, :modules, [])
+          wc = :erpc.call(rex, Rex.Strings, :word_count, ["rex in k3s rex works"])
+          rexs_view = :erpc.call(rex, :erlang, :nodes, [])
+          IO.puts("[#{node()}] rex=#{rex} add=#{inspect(add)} word_count=#{inspect(wc)} modules=#{inspect(mods)} rex_sees=#{inspect(rexs_view)}")
+          unless rex in seen, do: :erpc.call(rex, Rex.Cluster, :greet, [Atom.to_string(node())])
+        end
+        IO.puts("[#{node()}] visible=#{inspect(Node.list())} hidden=#{inspect(hidden)}")
+        Process.sleep(10_000)
+        loop(Enum.uniq(seen ++ hidden))
+      end
+    end
+
+    Demo.loop([])
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elixir
+  namespace: rex-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: elixir
+  template:
+    metadata:
+      labels:
+        app: elixir
+        cluster: rex-demo
+    spec:
+      containers:
+        - name: elixir
+          image: elixir:1.19.6-otp-28
+          command: ["sh", "-c"]
+          args:
+            - mix local.hex --force >/dev/null && mix local.rebar --force >/dev/null &&
+              exec elixir --name app@$POD_IP --cookie rexcookie /scripts/demo.exs
+          env:
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: MIX_HOME
+              value: /tmp/mix
+            - name: HEX_HOME
+              value: /tmp/hex
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts }
+      volumes:
+        - name: scripts
+          configMap: { name: demo-script }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rex
+  namespace: rex-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rex
+  namespace: rex-demo
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "endpoints"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rex
+  namespace: rex-demo
+subjects:
+  - kind: ServiceAccount
+    name: rex
+roleRef:
+  kind: Role
+  name: rex
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rex
+  namespace: rex-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rex
+  template:
+    metadata:
+      labels:
+        app: rex
+        cluster: rex-demo
+    spec:
+      serviceAccountName: rex
+      containers:
+        - name: rex
+          image: harbor.home/library/rex@sha256:cd781aa923216672b5a57de40330cdb393768a49235bfa0b41e7f874ac84edcf
+          command: ["sh", "-c"]
+          args:
+            - exec rex_node app@$POD_IP --cookie rexcookie --poll-interval 3
+              --k8s-dns rex-demo app
+              --k8s app cluster=rex-demo --k8s-lookup pods
+          env:
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: RUST_LOG
+              value: rex=debug
+          ports:
+            - { name: epmd, containerPort: 4369 }

@@ -1,0 +1,20 @@
+[package]
+name = "rex-compute"
+version = "0.1.0"
+edition = "2021"
+description = "Demo: a Rust compute node that renders Mandelbrot tiles for a Phoenix LiveView dashboard, joined to the BEAM cluster with rex."
+publish = false
+
+[[bin]]
+name = "compute"
+path = "src/main.rs"
+
+[dependencies]
+rex = { path = "../..", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
+png = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = 3

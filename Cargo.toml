@@ -1,0 +1,37 @@
+[package]
+name = "rex"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "A native Erlang distribution node in Rust: cluster with Elixir/Erlang, get discovered through libcluster, and serve :erpc calls from plain Rust code (no NIFs)."
+license = "MIT OR Apache-2.0"
+keywords = ["erlang", "elixir", "distribution", "erpc", "libcluster"]
+categories = ["network-programming"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "process"] }
+md-5 = "0.10"
+rand = "0.8"
+thiserror = "1"
+tracing = "0.1"
+socket2 = { version = "0.5", features = ["all"] }
+sha2 = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+hickory-resolver = { version = "0.25", optional = true }
+serde_json = { version = "1", optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"], optional = true }
+
+[features]
+default = ["dns", "http"]
+# DNS-based strategies (DnsPoll, KubernetesDns, KubernetesDnsSrv, Nebula) via hickory-resolver.
+dns = ["dep:hickory-resolver"]
+# HTTP-based strategies (Kubernetes API, Rancher) via reqwest + rustls.
+http = ["dep:reqwest", "dep:serde_json"]
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["full"] }
+
+[[example]]
+name = "rex_node"
